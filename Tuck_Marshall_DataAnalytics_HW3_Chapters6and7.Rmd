@@ -1,0 +1,309 @@
+---
+title: 'HW3: Chapters 6 and 7'
+author: "Marshall Tuck"
+date: "8/2/2020"
+output: pdf_document
+number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+1. Chapter 6 Problem 1 - page 259 ISLR
+* Three models using - forward stepwise, backwards stepwise, and best subset 
+  a. Smallest training RSS: Best subset
+  b. Smallest test RSS: Validate using cross-validation, low training RSS does not guarantee low test RSS
+  c. 
+    + True - k-parameter model using forward stepwise is a subset of k+1 parameter model using forward stepwise
+    + True - k-parameter model using backwards stepwise is a subset of k+1 parameter model using backward stepwise
+    + False - k-parameter model using backwards stepwise is _not_ a subset of k+1 parameter model using forward stepwise.
+    + False - k-parameter model using forwards stepwise is _not_ a subset of k+1 parameter model using backwards stepwise.
+    + False - k-parameter model using best subset is _not_ a subset of k+1 parameter model using best subsets.
+    
+2. Chapter 6 Problem 3 a and b - page 260 ISLR
+* Suppose we estimate the regression coefficients by minimizing an equation of RSS subject to sum of beta(j)<= s:
+  a. As we increase s from 0, the training RSS will
+    iv. Steadily decrease
+  b. As we increase s from 0, the test RSS will 
+    ii. Decrease initially, then eventually start increasing in a U shape
+      
+3. Chapter 6 Problem 9, page 263 ISLR
+  a. Split data in training and test set
+```{r}
+library(ISLR)
+
+#Sample
+set.seed(42)
+trainindex<- sample(1:nrow(College),.8*nrow(College))
+
+#Set aside 80 for training/20 for testing
+college_train<- College[trainindex,]
+college_test<- College[-trainindex,]
+```
+  b. Fit linear model using least squares, report test error
+```{r}
+#Fit linear model, predict the test values
+collegefit_linear<- lm(Apps~., data=college_train)
+collegefit_app_predict<- predict(collegefit_linear, college_test)
+
+#Mean squared error
+mean((college_test$Apps-collegefit_app_predict)^2)
+```
+  Test MSE for Linear fit model, fit on training data, tested on test data, is 1941715.
+  
+  c. Fit ridge regression on training data set, with lambda selected by cross validation. Report on test error. 
+```{r}
+library(glmnet)
+# X model matrix and Y response
+train.x<- model.matrix(Apps~., college_train)[,-1]
+test.x<- model.matrix(Apps~., college_test)[,-1]
+
+#Grid of possible lambdas
+grid<- 10^seq(10,-2, length=100)
+
+#Fit ridge model
+collegefit_ridge<- glmnet(train.x,college_train$Apps,alpha=0, lambda=grid)
+
+#Cross Validation function, output lambda associated with smallest train error
+cv.out<- cv.glmnet(train.x,college_train$Apps,alpha=0)
+bestlam<- cv.out$lambda.min
+bestlam
+
+#Error Prediction
+
+ridge.pred<- predict(collegefit_ridge, newx=test.x, s=bestlam)
+mean((college_test$Apps-ridge.pred)^2)
+
+```
+  Train MSE for Ridge Regression Model, fit on training data, tested on test data, is 3830755, higher than the linear model. Our lambda value that minimizes training error is 337.0816.
+  
+  d. Fit lasso model on training set, lambda chosen by cross validation, report on test error, along with number of non-zero coefficients
+
+```{r}
+#Fit Lasso model
+collegefit_lasso<- glmnet(train.x,college_train$Apps, alpha=1, lambda=grid)
+
+#Perform cross validation and output lambda that minimizes training error 
+cv.lasso<- cv.glmnet(train.x,college_train$Apps,alpha=1, lambda=grid)
+bestlam.lasso<-cv.lasso$lambda.min
+bestlam.lasso
+
+#Predict test values and return MSE
+lasso.pred<- predict(collegefit_lasso, newx=test.x, s=bestlam.lasso)
+mean((college_test$Apps-lasso.pred)^2)
+
+#Output coefficients
+predict(collegefit_lasso, type="coefficients", s=bestlam.lasso)
+```
+  Test MSE for Lasso Model, fit on training data, tested on test data, is 2051567 - less than the Ridge Model. Lambda that minimizes training error is 10.72. There are 15 non-zero coefficients.
+  
+  e. Fit a PCR model on the data set, with M chosen by cross validation. Report test error, along with value of M.
+```{r}
+library(pls)
+#Fit PCR Model
+pcr.fit<- pcr(Apps~., data=college_train,scale=TRUE, validation="CV")
+
+#Output plot of M
+#We find an M value that minimizes MSE to be 17
+summary(pcr.fit)
+validationplot(pcr.fit, val.type = "MSEP")
+
+#Predict test values using model, calculate error
+predict.pcr<- predict(pcr.fit, college_test, ncomp=17)
+mean((college_test$Apps-predict.pcr)^2)
+
+```
+
+Test MSE for PCR Model is 1941714 - equal to the linear model, with an optimal value of 17 for M. 
+
+  f. Fit a PLS model on the training set, with M chosen by cross validation, Report on Test error and M. 
+```{r}
+
+#Fit Partial Least Squares Model
+plsr.fit<- plsr(Apps~., data=college_train, scale=TRUE, validation="CV")  
+
+# We see a minimum train error at M=11
+summary(plsr.fit)
+validationplot(plsr.fit, val.type = "MSEP")
+
+#Predict test values
+predict.plsr<- predict(plsr.fit, college_test, ncomp=11)
+mean((college_test$Apps-predict.plsr)^2)
+```
+
+Test MSE for PLSR Model is 1944806, slightly larger than the PCR Model and the linear model. M was found to be 11 to minimize CV value. 
+
+  g. Comment on the results obtained. How accurately can we predict the number of college applications received? Is there much difference in error among the 5 approaches?
+  
+* The model with the lowest test MSE is the Linear Model and the Partial Least Squares Model indicating more predictive ability, with test MSE of 1941715.  
+* The model with the largest test MSE indicating less predictive ability is Ridge Regression model = 3830755.  
+
+
+4. Chapter 7 Problem 10 b, c, and d - page 300 ISLR
+    b. Fit a Gam on College training data set, using out of state-tuition as the response and features forward subset regressors.
+```{r}
+library(leaps)
+library(gam)
+
+#Use reg subsets to find the forward selection steps
+reg.fit.forward<- regsubsets(Outstate~., data=college_train, nvmax=18, method="forward")
+
+#Plot the forward selected RSS, find a good model has 7 regressors
+plot(reg.fit.forward$rss)
+
+#Output the 7 included regressors PrivateYes, RoomBoard, PhD, S.F.Ratio, perc.alumni, Expend, Grad.Rate
+summary(reg.fit.forward)
+
+#Fit GAM model
+gam.fit<- lm(Outstate~Private+s(Room.Board, df=4)+s(PhD, df=4)+s(S.F.Ratio, df=4)+s(perc.alumni, df=4)+s(Expend, df=4)+s(Grad.Rate, df=4), data=college_train)
+
+par(mfrow=c(3,3))
+plot.Gam(gam.fit, se=TRUE, col="red")
+
+```
+
+From our 7 included variables, we see negative relationships between our response Outstate and S.F. Ratio, and positive relationships for all other included variables.  
+    c. Evaluate the model on the test set  
+```{r}
+gam.pred<-predict(gam.fit, college_test)
+mean((college_test$Outstate-gam.pred)^2)
+```
+We see a MSE of 5014766 when evaluated on our test set. 
+
+    d. For which variables is there evidence of non-linear relationship?
+    
+I do not see evidence of a non-linear relationship in the middle of the observed values of our data. Any non-linearity will be at the tails based on the standard errors given. This indicates that most likely the effect is linear and any non-linearity may not be significant if it exists at all.
+
+
+5. Read in the dataset below. Take a random sample of 400 as the test set. 
+```{r}
+#Set seed
+set.seed(42)
+
+#Read in data, output plot
+df3<- read.table("hump1000.csv", header=TRUE, sep=',')
+plot(df3$x, df3$y, xlab="x", ylab="y")
+
+testindex<-sample(1:nrow(df3), 400)
+df3_test<-df3[testindex,]
+df3_train<-df3[-testindex,]
+```
+
+  a. Use R to fit a polynomial model to this data. Plot the data and fitted model. What is estimated RMSE on the test data? 
+```{r}
+#Fit Polynomial to the eight to see where significance ends, ends at power of 7
+# That will be our chosen model (to the seventh power)
+polynom<- lm(y~poly(x,8), data=df3_train)  
+summary(polynom)
+best_poly<- lm(y~poly(x,7), data=df3_train)
+
+#Make some predictions
+pred_df<-data.frame(x=seq(min(df3_train$x), max(df3_train$x),by=.01))
+
+#Fit the best poly model to those predictions
+pred_poly_train<-predict(best_poly, newdata=pred_df, se=TRUE)
+
+
+#Plot the raw data and the predicted values of x and their corresponding fits. 
+plot(df3_train)
+lines(pred_df$x, pred_poly_train$fit, col='red', lty=2, lwd=2)
+title (" Polynomial fit of 7 ")
+
+#Predict test values
+pred_test<- predict(best_poly, newdata=df3_test)
+#Output RMSE
+sqrt(mean((df3_test$y-pred_test)^2))
+
+```
+
+The RMSE of the fitted model on the test data is .1283.
+
+  b. Use R to fit a natural spline, consider models up to 10 knots. What is knot number that gives the best fit to the training data set? What is RMSE?
+  
+```{r}
+library(tidyverse)
+#Fit spline model to training data set using df=2
+spline_fit<- lm(y~ns(x, df=2), data=df3_train)
+#Predict output from predicted x values above
+spline_fit_df<- predict(spline_fit, newdata=pred_df)
+
+#Plot outcome
+plot(df3_train)
+lines(pred_df$x, spline_fit_df, col='red', lty=2, lwd=2)
+title (" Natural spline fit with df= 2")
+legend("topright",legend=c("2 DF"),
+         col=c("red"),lty=1,lwd=2,cex=.8)
+
+#Write function to find smallest RMSE from knot count 2 to 10
+errors<-tibble()
+for (i in 2:10){
+  knot.count<-i
+  spline_fit_knot<- lm(y~ns(x, df=c(i)), data=df3_train)
+  pred_spline<-predict(spline_fit_knot, newdata=df3_test)
+  RMSE<-sqrt(mean((df3_test$y-pred_spline)^2))%>%as_tibble()
+  error.i<-tibble(RMSE, knot.count)
+  errors<-errors%>%
+    bind_rows(error.i)
+}
+
+errors
+
+#Return min RMSE and corresponding knot amount
+errors%>%
+  filter(value==min(value))
+
+#Fit spline model
+spline_fit_knot<- lm(y~ns(x, df=c(8)), data=df3_train)
+spline_fit_knot_df<- predict(spline_fit_knot, newdata = pred_df)
+
+#Plot values
+plot(df3_train)
+lines(pred_df$x, predict(spline_fit_knot, newdata=pred_df), col='red', lty=2, lwd=2)
+title (" Natural spline fit with df= 8")
+legend("topright",legend=c("8 DF"),
+         col=c("red"),lty=1,lwd=2,cex=.8)
+
+```
+
+It appears a model with df=8 is the best fit to the data, represented by the red dotted line. The RMSE of our 8 knots model against our test data is .1283. This corresponds to our RMSE from using a polynomial fit to the eighth power. 
+
+  c. Use R to fit a local regression model. Consider a range of spans for the loess call. Estimate the span needed to give the correct model. What is RMSE for fitted model?
+
+```{r}
+#Write function to find smallest RMSE from span of .1 to 10
+errors<-tibble()
+for (i in 1:100){
+  span<-i/10
+  loess_fit<- loess(y~x,span=span,data=df3_train, control=loess.control(surface="direct"))
+  pred_loess<-predict(loess_fit, newdata=df3_test)
+  RMSE<-sqrt(mean((df3_test$y-pred_loess)^2))%>%as_tibble()
+  error.i<-tibble(RMSE, span)
+  errors<-errors%>%
+    bind_rows(error.i)
+}
+
+errors
+
+#Return span amount associated with smallest test RMSE
+errors%>%
+  filter(value==min(value))
+
+#Set local regression models with optimum span values
+loess_fit<- loess(y~x,span=.4,data=df3_train, control=loess.control(surface="direct"))
+
+
+#Plot fit
+plot(df3_train)                   
+lines(pred_df$x,predict(loess_fit, newdata= pred_df), col="red",lwd=2)
+title (" Local Regression fit with span = .4")
+legend("topright",legend=c(".4 span"),
+         col=c("red"),lty=1,lwd=2,cex=.8)
+
+
+```
+
+A span=.4, corresponding to the red line, is the span value that best fits the data. It has an RMSE of .1286 compared to the testing data, slightly greater than the spline and Polynomial Model RMSE.
+
+  
+  
